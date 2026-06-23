@@ -26,9 +26,12 @@ from qgis.core import (
     QgsUnitTypes,
 )
 from qgis.PyQt.QtCore import QVariant
-from qgis.PyQt.QtGui import QColor, QFont
+from qgis.PyQt.QtGui import QColor, QFont, QFontDatabase
 
 API_KEY = ""
+
+FONT_PATH = "/home/ubuntu/jf-openhuninn-1.1.ttf"
+
 RESOURCE_ID = "W-C0034-005"
 API_URL = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/{RESOURCE_ID}?Authorization={API_KEY}"
 
@@ -261,7 +264,7 @@ def build_time_label_layers(label_points, layer_name_prefix, point_type):
     leader_fields = QgsFields()
     leader_fields.append(QgsField("seq",       QVariant.Int))
     leader_fields.append(QgsField("type",      QVariant.String))
-    leader_fields.append(QgsField("time_text", QVariant.String))
+    leader_fields.append(QgsField("label_text", QVariant.String))
 
     leader_layer = QgsVectorLayer("LineString?crs=EPSG:4326", f"{layer_name_prefix}_Leader", "memory")
     leader_layer.dataProvider().addAttributes(leader_fields)
@@ -270,12 +273,12 @@ def build_time_label_layers(label_points, layer_name_prefix, point_type):
     leader_feats = []
     for idx, item in enumerate(placed):
         lon, lat, point_id, angle_deg, label_lon, label_lat, leader_km = item
-        time_text = label_points[idx][2]
+        label_text = label_points[idx][2]
         if abs(label_lon - lon) < 1e-9 and abs(label_lat - lat) < 1e-9:
             continue
         feat = QgsFeature(leader_fields)
         feat.setGeometry(QgsGeometry.fromPolylineXY([QgsPointXY(lon, lat), QgsPointXY(label_lon, label_lat)]))
-        feat.setAttributes([int(point_id), point_type, time_text])
+        feat.setAttributes([int(point_id), point_type, label_text])
         leader_feats.append(feat)
 
     leader_layer.dataProvider().addFeatures(leader_feats)
@@ -289,7 +292,7 @@ def build_time_label_layers(label_points, layer_name_prefix, point_type):
     label_fields = QgsFields()
     label_fields.append(QgsField("seq",       QVariant.Int))
     label_fields.append(QgsField("type",      QVariant.String))
-    label_fields.append(QgsField("time_text", QVariant.String))
+    label_fields.append(QgsField("label_text", QVariant.String))
 
     label_layer = QgsVectorLayer("Point?crs=EPSG:4326", f"{layer_name_prefix}_Text", "memory")
     label_layer.dataProvider().addAttributes(label_fields)
@@ -298,10 +301,10 @@ def build_time_label_layers(label_points, layer_name_prefix, point_type):
     label_feats = []
     for idx, item in enumerate(placed):
         lon, lat, point_id, angle_deg, label_lon, label_lat, leader_km = item
-        time_text = label_points[idx][2]
+        label_text = label_points[idx][2]
         feat = QgsFeature(label_fields)
         feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(label_lon, label_lat)))
-        feat.setAttributes([int(point_id), point_type, time_text])
+        feat.setAttributes([int(point_id), point_type, label_text])
         label_feats.append(feat)
 
     label_layer.dataProvider().addFeatures(label_feats)
@@ -312,12 +315,14 @@ def build_time_label_layers(label_points, layer_name_prefix, point_type):
     }))
 
     pal = QgsPalLayerSettings()
-    pal.fieldName = "time_text"
+    pal.fieldName = "label_text"
     pal.enabled   = True
     pal.placement = QgsPalLayerSettings.Free
 
     text_fmt = QgsTextFormat()
-    text_fmt.setSize(7.0)
+    if FONT_PATH and QFontDatabase.addApplicationFont(FONT_PATH) != -1:
+        text_fmt.setFont(QFont("jf open粉圓"))
+    text_fmt.setSize(9.0)
     text_fmt.setSizeUnit(QgsUnitTypes.RenderPoints)
 
     buf = QgsTextBufferSettings()
@@ -428,19 +433,7 @@ def create_layers_for_typhoon(typhoon):
         dt  = fix.get("DateTime", "")
         feats_analysis.append(make_point_feature(point_fields, i, "Analysis", dt, lon, lat, fix))
         analysis_points.append((lon, lat))
-        analysis_label_points.append((lon, lat, format_time_label(dt)))
-        if DRAW_RADIUS_15MS:
-            c15 = get_circle(fix, "Circle15ms")
-            if c15 and c15.get("Radius"):
-                pts = make_geo_circle(lon, lat, float(c15["Radius"]))
-                if pts:
-                    radius15_feats.append(make_radius_feature(radius_fields, i, "Analysis", dt, "", float(c15["Radius"]), "15ms", pts))
-        if DRAW_RADIUS_25MS:
-            c25 = get_circle(fix, "Circle25ms")
-            if c25 and c25.get("Radius"):
-                pts = make_geo_circle(lon, lat, float(c25["Radius"]))
-                if pts:
-                    radius25_feats.append(make_radius_feature(radius_fields, i, "Analysis", dt, "", float(c25["Radius"]), "25ms", pts))
+        analysis_label_points.append((lon, lat, f"{typhoon_name} ({ty_no}) {typhoon.get('TyphoonName', '')} {format_time_label(dt)}"))
 
     layer_analysis.dataProvider().addFeatures(feats_analysis)
     layer_analysis.updateExtents()
@@ -460,7 +453,7 @@ def create_layers_for_typhoon(typhoon):
         fhr = fix.get("ForecastHour", "")
         feats_forecast.append(make_point_feature(point_fields, i, "Forecast", dt, lon, lat, fix, forecast_hr=fhr))
         forecast_points.append((lon, lat))
-        forecast_label_points.append((lon, lat, format_time_label(dt, fhr)))
+        forecast_label_points.append((lon, lat, f"{typhoon_name} ({ty_no}) {typhoon.get('TyphoonName', '')} {format_time_label(dt, fhr)}"))
         if DRAW_RADIUS_15MS:
             c15 = get_circle(fix, "Circle15ms")
             if c15 and c15.get("Radius"):
@@ -538,8 +531,8 @@ def create_layers_for_typhoon(typhoon):
         _, intensity_zh, _ = classify_intensity(last_fix.get("MaxWindSpeed"))
         info_text = (
             f"{typhoon_name} / {intensity_zh} / "
-            f"{last_fix.get('MaxWindSpeed','?')} m/s / "
-            f"{last_fix.get('Pressure','?')} hPa"
+            f"{last_fix.get('MaxWindSpeed', '?')} m/s / "
+            f"{last_fix.get('Pressure', '?')} hPa"
         )
 
         layer_current = QgsVectorLayer("Point?crs=EPSG:4326", f"{layer_prefix}_CurrentPosition", "memory")
@@ -661,7 +654,6 @@ def style_current_position_layer(layer):
 
 
 def main():
-    print("正在抓取颱風資料...")
     data = fetch_typhoon_json()
 
     if data.get("success") not in ("true", True):
@@ -669,10 +661,7 @@ def main():
 
     typhoons = pick_typhoons(data)
     if not typhoons:
-        print("目前沒有符合條件的活動颱風資料。")
         return []
-
-    print(f"共取得 {len(typhoons)} 個颱風資料，開始繪製...")
 
     project     = QgsProject.instance()
     all_extents = []
@@ -680,7 +669,6 @@ def main():
 
     for typhoon in typhoons:
         info = create_layers_for_typhoon(typhoon)
-        print(f"  -> {info['name']} (編號 {info['ty_no']})")
 
         style_analysis_layer(info["analysis"])
         style_forecast_layer(info["forecast"])
@@ -728,7 +716,6 @@ def main():
         canvas.setExtent(combined_extent)
         canvas.refresh()
 
-    print(f"完成！已建立 {len(results)} 個颱風的路徑、暴風圈、時間標籤圖層。")
     return results
 
 
